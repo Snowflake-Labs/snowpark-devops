@@ -1,4 +1,4 @@
-# Snowpark CI/CD Template
+# Snowpark DevOps Template
 
 This repo is a sample project for a stored procedure (that created / depends on a user defined function) which is configured for CI/CD via pytest and GitHub Actions.
 
@@ -118,4 +118,4 @@ You can navigate to this branch locally by running `git checkout forecast`.
 
 Any changes made to this branch that are pushed up will automatically kick off actions that will create the artifacts in the `forecast` schema. 
 
-If you open a pull request and merge it to main, you will see these features now promoted to the `main` environment
+If you open a pull request and merge it to main, you will see these features now promoted to the `main` environment.
