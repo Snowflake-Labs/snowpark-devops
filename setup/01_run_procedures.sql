@@ -1,0 +1,1 @@
+call my_procedure();

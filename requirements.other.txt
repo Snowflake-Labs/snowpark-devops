@@ -1,0 +1,4 @@
+# text file to store requirements that need to be manually installed
+# NOTE: Can not include native libraries as those can only be included via Anaconda
+#
+# holidays>0.14
