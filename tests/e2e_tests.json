@@ -4,6 +4,10 @@
     {
       "name": "Prediction returns positive int",
       "value": "SELECT predict_pce_udf(2023) WHERE predict_pce_udf(2023) < 0"
+    },
+    {
+      "name": "Predicted value exists for future year",
+      "value": "SELECT a.year from (SELECT 2025 as year) a WHERE NOT EXISTS (SELECT 1 from pce_predict b WHERE b.year = a.year );"
     }
   ]
 }

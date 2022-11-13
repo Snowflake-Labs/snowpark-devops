@@ -2,3 +2,4 @@ snowflake-snowpark-python[pandas]
 sklearn
 pandas
 pytest
+pytest-mock

@@ -2,8 +2,8 @@
 # coding: utf-8
 
 from snowflake.snowpark import Session, DataFrame
-from snowflake.snowpark.types import PandasSeriesType, PandasDataFrameType, IntegerType, FloatType
-from snowflake.snowpark.functions import col, year
+from snowflake.snowpark.types import PandasSeriesType, IntegerType, FloatType, StructType, StructField, DoubleType, PandasDataFrameType
+from snowflake.snowpark.functions import col, year, max, lit
 from sklearn.linear_model import LinearRegression
 import pandas as pd
 
@@ -14,6 +14,8 @@ def run(session: Session) -> str:
     filtered_df = filter_personal_consumption_expenditures(pce_df)
     pce_pred = train_linear_regression_model(filtered_df.to_pandas())  # type: ignore
     register_udf(pce_pred, session)
+    forecast_df = generate_new_table_with_predicted(filtered_df, pce_pred, session, 10)
+    forecast_df.write.save_as_table('PCE_PREDICT', mode='overwrite')
     return str(OUTPUTS)
 
 # get PCE data
@@ -51,6 +53,16 @@ def register_udf(model, session):
                         replace=True,
                         stage_location="@deploy")
     OUTPUTS.append('UDF registered')
+
+def generate_new_table_with_predicted(input_df: DataFrame, model: LinearRegression, session: Session, num_years: int) -> DataFrame:
+    maxYear: int = input_df.agg(max(col('Year'))).collect()[0][0] # type: ignore
+    df = []
+    for x in range(1, num_years+1):
+        df.append([maxYear+x, model.predict([[maxYear+x]])[0].round(3).astype(float), 1])
+    predict_df = session.create_dataframe(df, schema=StructType([StructField('Year', IntegerType(), nullable=True), StructField('PCE', DoubleType(), nullable=True), StructField('Is_Predicted', IntegerType(), nullable=True)]))
+    input_df = input_df.with_column('Is_Predicted', lit(0))
+    return input_df.union(predict_df).sort(col('Year'))
+
 
 if __name__ == "__main__":
     from utils import get_session

@@ -1,4 +1,5 @@
 import pytest
+from sklearn.linear_model import LinearRegression
 from snowflake.snowpark import Session
 from snowflake.snowpark.types import LongType, DateType, StringType, StructType, StructField, DoubleType, IntegerType
 import pandas as pd
@@ -40,3 +41,29 @@ def test_linear_regression():
     source_pd = pd.DataFrame(source_data, columns=['YEAR', 'PCE'])
     actual_model = process.train_linear_regression_model(source_pd)
     assert (actual_model.predict([[2021]])[0] == pytest.approx(113.1605, 0.01))
+
+def test_save_model(session: Session, mocker):
+    source_data = [
+        (2017, 106.051),
+        (2018, 108.318),
+        (2019, 109.922),
+        (2020, 111.225)     
+    ]
+    source_df = session.create_dataframe(source_data,
+        schema=StructType([StructField('Year', IntegerType(), nullable=True), StructField('PCE', DoubleType(), nullable=True)])
+    )
+    ## mock model.predict([[x]])
+    mocker.patch('sklearn.linear_model.LinearRegression.predict', return_value=pd.Series(1.123))
+    actual_df = process.generate_new_table_with_predicted(source_df, LinearRegression(), session, 2)
+    expected_data = [
+        (2017, 106.051, 0),
+        (2018, 108.318, 0),
+        (2019, 109.922, 0),
+        (2020, 111.225, 0),
+        (2021, 1.123, 1),
+        (2022, 1.123, 1)
+    ]
+    expected_df = session.create_dataframe(expected_data,
+        schema=StructType([StructField('Year', IntegerType(), nullable=True), StructField('PCE', DoubleType(), nullable=True),StructField('Is_Predicted', IntegerType(), nullable=True)])
+    )
+    assert (actual_df.collect() == expected_df.collect())
