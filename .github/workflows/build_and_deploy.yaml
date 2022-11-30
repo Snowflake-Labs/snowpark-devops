@@ -1,0 +1,125 @@
+# This is a basic workflow to help you get started with Actions
+
+name: Build, Deploy, Validate
+
+# Controls when the workflow will run
+on:
+  # Triggers the workflow on push or pull request events but only for the main branch
+  push:
+    branches:
+      - "*"
+    tags:
+      - "v*"
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+env:
+  SNOWSQL_PWD: ${{ secrets.SNOWSQL_PWD }}
+  SNOWSQL_ACCOUNT: ${{ secrets.SNOWSQL_ACCOUNT }}
+  SNOWSQL_USER: ${{ secrets.SNOWSQL_USER }}
+  SNOWSQL_DATABASE: ${{ secrets.SNOWSQL_DATABASE }}
+  SNOWSQL_SCHEMA: ${{ github.ref_name }}
+  SNOWSQL_ROLE: ${{ secrets.SNOWSQL_ROLE }}
+  SNOWSQL_WAREHOUSE: ${{ secrets.SNOWSQL_WAREHOUSE }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.assertions }}
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install SnowSQL
+        run: |
+          curl -O https://sfc-repo.snowflakecomputing.com/snowsql/bootstrap/1.2/linux_x86_64/snowsql-1.2.23-linux_x86_64.bash
+          SNOWSQL_DEST=~/bin SNOWSQL_LOGIN_SHELL=~/.profile bash snowsql-1.2.23-linux_x86_64.bash
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.8"
+      - name: Install python packages
+        run: pip install -r requirements.txt
+      - name: Create schema for branch if not exists
+        run: |
+          ~/bin/snowsql -q 'create schema if not exists ${{ github.ref_name }}' -o friendly=false
+      - name: Run unit tests
+        run: python -m pytest
+      - name: Installing manually managed packages for deployment
+        run: |
+          echo 'Installing packages that require manual installation....'
+          pip install -t .packages -r requirements.other.txt
+      - name: Create zip package
+        run: |
+          echo 'Creating zip package...'
+          if [ -d "build" ] ; then
+            cd .packages
+            zip -r ../app.zip .
+            cd ..
+          fi
+          zip -g  -x .\* -r app.zip .
+      - name: Archive python artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: app
+          path: app.zip
+          retention-days: 7
+      - name: Parse test plan
+        id: matrix
+        run: |
+          assertions=$(cat ./tests/e2e_tests.json | jq -c '.assertions' | sed 's/{{schema}}/${{ github.ref_name }}/g')
+          echo "::set-output name=assertions::$assertions"
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/download-artifact@v3
+        with:
+          name: app
+      - name: Install SnowSQL
+        run: |
+          curl -O https://sfc-repo.snowflakecomputing.com/snowsql/bootstrap/1.2/linux_x86_64/snowsql-1.2.23-linux_x86_64.bash
+          SNOWSQL_DEST=~/bin SNOWSQL_LOGIN_SHELL=~/.profile bash snowsql-1.2.23-linux_x86_64.bash
+      - name: Upload artifact to SnowSQL
+        run: |
+          ~/bin/snowsql -s ${{ github.ref_name }} -q 'create stage if not exists deploy' -o friendly=false -o exit_on_error=true
+          ~/bin/snowsql -s ${{ github.ref_name }} -q 'put file://'$(pwd)'/app.zip @deploy overwrite=true auto_compress=false' -o friendly=false -o exit_on_error=true
+      - name: Create resources and seed database
+        run: |
+          ~/bin/snowsql -s ${{ github.ref_name }} -f ./setup/00_init_schema.sql -o friendly=false -o exit_on_error=true
+
+  run_procedures:
+    needs: [deploy, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install SnowSQL
+        run: |
+          curl -O https://sfc-repo.snowflakecomputing.com/snowsql/bootstrap/1.2/linux_x86_64/snowsql-1.2.23-linux_x86_64.bash
+          SNOWSQL_DEST=~/bin SNOWSQL_LOGIN_SHELL=~/.profile bash snowsql-1.2.23-linux_x86_64.bash
+      - name: Run any procedures
+        run: |
+          ~/bin/snowsql -s ${{ github.ref_name }} -f ./setup/01_run_procedures.sql -o friendly=false -o exit_on_error=true
+
+  e2etest:
+    needs: [deploy, build, run_procedures]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        tests: ${{fromJson(needs.build.outputs.matrix)}}
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install SnowSQL
+        run: |
+          curl -O https://sfc-repo.snowflakecomputing.com/snowsql/bootstrap/1.2/linux_x86_64/snowsql-1.2.23-linux_x86_64.bash
+          SNOWSQL_DEST=~/bin SNOWSQL_LOGIN_SHELL=~/.profile bash snowsql-1.2.23-linux_x86_64.bash
+      - name: Run test - ${{ matrix.tests.name }}
+        run: |
+          rowCount=$(~/bin/snowsql -s ${{ github.ref_name }} -q $'${{ matrix.tests.value }}' -o friendly=false -o exit_on_error=true -o output_format=json -o timing=false | jq '. | length')
+          if [[ $rowCount -ne 0 ]]; then
+            echo "Test failed! $rowCount rows returned" 1>&2
+            exit 1
+          else
+            echo "Test Passed! $rowCount rows returned"
+          fi
